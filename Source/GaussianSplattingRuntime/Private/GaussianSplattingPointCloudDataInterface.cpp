@@ -63,14 +63,45 @@ void FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::PostDataToGPU()
 		return;
 	}
 	const TArray<FGaussianSplattingPoint>& Points = Owner->PointCloud->GetPoints();
+
+	// GPU buffer layout: GS_GPU_FLOAT4S_PER_POINT (16) float4 per point
+	//  [0]  Position.xyz, SHDegree (as float)
+	//  [1]  Quat.xyzw
+	//  [2]  Scale.xyz, pad
+	//  [3]  Color(DC raw).rgb, Alpha
+	//  [4]  SHCoeffs[ 0.. 3]
+	//  [5]  SHCoeffs[ 4.. 7]
+	//  [6]  SHCoeffs[ 8..11]
+	//  [7]  SHCoeffs[12..15]
+	//  [8]  SHCoeffs[16..19]
+	//  [9]  SHCoeffs[20..23]
+	//  [10] SHCoeffs[24..27]
+	//  [11] SHCoeffs[28..31]
+	//  [12] SHCoeffs[32..35]
+	//  [13] SHCoeffs[36..39]
+	//  [14] SHCoeffs[40..43]
+	//  [15] SHCoeffs[44], pad, pad, pad
+	const int32 Float4sPerPoint = GS_GPU_FLOAT4S_PER_POINT;
 	TArray<FVector4f> PointData;
-	PointData.SetNum(Points.Num() * 4);
+	PointData.SetNum(Points.Num() * Float4sPerPoint);
 	for (int i = 0; i < Points.Num(); i++) {
 		const FGaussianSplattingPoint& Point = Points[i];
-		PointData[i * 4] = Point.Position;
-		PointData[i * 4 + 1] = FVector4f(Point.Quat.X, Point.Quat.Y, Point.Quat.Z, Point.Quat.W);
-		PointData[i * 4 + 2] = Point.Scale;
-		PointData[i * 4 + 3] = Point.Color;
+		int32 Base = i * Float4sPerPoint;
+		PointData[Base + 0] = FVector4f(Point.Position.X, Point.Position.Y, Point.Position.Z, (float)Point.SHDegree);
+		PointData[Base + 1] = FVector4f(Point.Quat.X, Point.Quat.Y, Point.Quat.Z, Point.Quat.W);
+		PointData[Base + 2] = FVector4f(Point.Scale.X, Point.Scale.Y, Point.Scale.Z, 0.0f);
+		PointData[Base + 3] = FVector4f(Point.Color.R, Point.Color.G, Point.Color.B, Point.Color.A);
+
+		// Pack 45 SH coefficients into 12 float4 slots (indices 4..15)
+		
+		for (int32 j = 0; j < 12; j++)
+		{
+			float v0 = (j * 4 + 0 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 0] : 0.0f;
+			float v1 = (j * 4 + 1 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 1] : 0.0f;
+			float v2 = (j * 4 + 2 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 2] : 0.0f;
+			float v3 = (j * 4 + 3 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 3] : 0.0f;
+			PointData[Base + 4 + j] = FVector4f(v0, v1, v2, v3);
+		}
 	}
 
 	ENQUEUE_RENDER_COMMAND(FUpdateSpectrumBuffer)(
@@ -116,6 +147,7 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetFunctions(TArray<FNiag
 	Super::GetFunctions(OutFunctions);
 #endif
 	{
+		// Original GetPointData - 4 outputs, backwards compatible
 		FNiagaraFunctionSignature GetPointDataSignature;
 		GetPointDataSignature.Name = GetPointDataFunctionName;
 		GetPointDataSignature.Inputs.Add(FNiagaraVariable(GetClass(), TEXT("GaussianSplattingPointCloud")));
@@ -127,6 +159,33 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetFunctions(TArray<FNiag
 		GetPointDataSignature.bMemberFunction = true;
 		GetPointDataSignature.bRequiresContext = false;
 		OutFunctions.Add(GetPointDataSignature);
+	}
+	{
+		// New GetPointDataSH - includes SH coefficients
+		FNiagaraFunctionSignature GetPointDataSHSignature;
+		GetPointDataSHSignature.Name = GetPointDataSHFunctionName;
+		GetPointDataSHSignature.Inputs.Add(FNiagaraVariable(GetClass(), TEXT("GaussianSplattingPointCloud")));
+		GetPointDataSHSignature.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("Index")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Position")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("Quat")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Scale")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetColorDef(), TEXT("Color")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("SHDegree")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH0")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH1")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH2")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH3")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH4")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH5")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH6")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH7")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH8")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH9")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH10")));
+		GetPointDataSHSignature.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("SH11")));
+		GetPointDataSHSignature.bMemberFunction = true;
+		GetPointDataSHSignature.bRequiresContext = false;
+		OutFunctions.Add(GetPointDataSHSignature);
 	}
 	{
 		FNiagaraFunctionSignature GetPointCountSignature;
@@ -237,6 +296,10 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetVMExternalFunction(con
 	if (BindingInfo.Name == GetPointDataFunctionName){
 		NDI_FUNC_BINDER(UNiagaraDataInterfaceGaussianSplattingPointCloud, GetPointData)::Bind(this, OutFunc);
 	}
+	else if (BindingInfo.Name == GetPointDataSHFunctionName){
+		// GetPointDataSH uses same CPU path as GetPointData (CPU path doesn't use SH anyway)
+		NDI_FUNC_BINDER(UNiagaraDataInterfaceGaussianSplattingPointCloud, GetPointData)::Bind(this, OutFunc);
+	}
 	else if (BindingInfo.Name == GetPointCountFunctionName){
 		NDI_FUNC_BINDER(UNiagaraDataInterfaceGaussianSplattingPointCloud, GetPointCount)::Bind(this, OutFunc);
 	}
@@ -262,14 +325,58 @@ bool UNiagaraDataInterfaceGaussianSplattingPointCloud::GetFunctionHLSL(const FNi
 	}
 	else if (FunctionInfo.DefinitionName == GetPointDataFunctionName)
 	{
+		// Original GetPointData - backwards compatible, 4 outputs
 		static const TCHAR* FormatBounds = TEXT(R"(
 			void {FunctionName}(int In_PointIndex, out float3 Out_Position, out float4 Out_Quat, out float3 Out_Scale, out float4 Out_Color)
 			{
 				int PointIndex = In_PointIndex < {PointCount} ? In_PointIndex : {PointCount} - 1;
-				Out_Position = {PointDataBuffer}.Load(PointIndex * 4 ).xyz;
-				Out_Quat = {PointDataBuffer}.Load(PointIndex * 4 + 1);
-				Out_Scale = {PointDataBuffer}.Load(PointIndex * 4 + 2).xyz;
-				Out_Color = {PointDataBuffer}.Load(PointIndex * 4 + 3);
+				int Base = PointIndex * 16;
+				Out_Position = {PointDataBuffer}.Load(Base + 0).xyz;
+				Out_Quat     = {PointDataBuffer}.Load(Base + 1);
+				Out_Scale    = {PointDataBuffer}.Load(Base + 2).xyz;
+				Out_Color    = {PointDataBuffer}.Load(Base + 3);
+			}
+		)");
+
+		TMap<FString, FStringFormatArg> ArgsBounds = {
+			{TEXT("FunctionName"), FStringFormatArg(FunctionInfo.InstanceName)},
+			{TEXT("PointCount"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointCountName)},
+			{TEXT("PointDataBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointDataBufferName)},
+		};
+		OutHLSL += FString::Format(FormatBounds, ArgsBounds);
+		return true;
+	}
+	else if (FunctionInfo.DefinitionName == GetPointDataSHFunctionName)
+	{
+		// New GetPointDataSH - full SH data, 16 outputs
+		static const TCHAR* FormatBounds = TEXT(R"(
+			void {FunctionName}(int In_PointIndex, out float3 Out_Position, out float4 Out_Quat, out float3 Out_Scale, out float4 Out_Color,
+				out int Out_SHDegree,
+				out float4 Out_SH0, out float4 Out_SH1, out float4 Out_SH2,
+				out float4 Out_SH3, out float4 Out_SH4, out float4 Out_SH5,
+				out float4 Out_SH6, out float4 Out_SH7, out float4 Out_SH8,
+				out float4 Out_SH9, out float4 Out_SH10, out float4 Out_SH11)
+			{
+				int PointIndex = In_PointIndex < {PointCount} ? In_PointIndex : {PointCount} - 1;
+				int Base = PointIndex * 16;
+				float4 Slot0 = {PointDataBuffer}.Load(Base + 0);
+				Out_Position  = Slot0.xyz;
+				Out_SHDegree  = (int)Slot0.w;
+				Out_Quat      = {PointDataBuffer}.Load(Base + 1);
+				Out_Scale     = {PointDataBuffer}.Load(Base + 2).xyz;
+				Out_Color     = {PointDataBuffer}.Load(Base + 3);
+				Out_SH0       = {PointDataBuffer}.Load(Base + 4);
+				Out_SH1       = {PointDataBuffer}.Load(Base + 5);
+				Out_SH2       = {PointDataBuffer}.Load(Base + 6);
+				Out_SH3       = {PointDataBuffer}.Load(Base + 7);
+				Out_SH4       = {PointDataBuffer}.Load(Base + 8);
+				Out_SH5       = {PointDataBuffer}.Load(Base + 9);
+				Out_SH6       = {PointDataBuffer}.Load(Base + 10);
+				Out_SH7       = {PointDataBuffer}.Load(Base + 11);
+				Out_SH8       = {PointDataBuffer}.Load(Base + 12);
+				Out_SH9       = {PointDataBuffer}.Load(Base + 13);
+				Out_SH10      = {PointDataBuffer}.Load(Base + 14);
+				Out_SH11      = {PointDataBuffer}.Load(Base + 15);
 			}
 		)");
 
@@ -389,6 +496,7 @@ bool UNiagaraDataInterfaceGaussianSplattingPointCloud::CopyToInternal(UNiagaraDa
 
 // Global VM function names, also used by the shaders code generation methods.
 const FName UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointDataFunctionName("GetPointData");
+const FName UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointDataSHFunctionName("GetPointDataSH");
 const FName UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointCountFunctionName("GetPointCount");
 
 // Global variable prefixes, used in HLSL parameter declarations.

@@ -14,6 +14,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/SphereComponent.h"
 #include "Misc/EngineVersionComparison.h"
+#include "UObject/SavePackage.h"
 #include "GaussianSplattingEditorSettings.h"
 #include "LevelEditorSubsystem.h"
 #include "SLevelViewport.h"
@@ -910,7 +911,17 @@ void UGaussianSplattingStep_GaussianSplatting::Export()
 		FAssetRegistryModule::AssetCreated(NewAsset);
 		FPackagePath NewPackagePath = FPackagePath::FromPackageNameChecked(NewPackage->GetName());
 		FString PackageLocalPath = NewPackagePath.GetLocalFullPath();
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 		UPackage::SavePackage(NewPackage, NewAsset, RF_Public | RF_Standalone, *PackageLocalPath, GError, nullptr, false, true, SAVE_NoError);
+#else
+		FSavePackageArgs SavePackageArgs;
+		SavePackageArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SavePackageArgs.SaveFlags = SAVE_NoError;
+		SavePackageArgs.Error = GError;
+		SavePackageArgs.bForceByteSwapping = false;
+		SavePackageArgs.bWarnOfLongFilename = true;
+		UPackage::SavePackage(NewPackage, NewAsset, *PackageLocalPath, SavePackageArgs);
+#endif
 		TArray<UObject*> ObjectsToSync;
 		ObjectsToSync.Add(NewAsset);
 		GEditor->SyncBrowserToObjects(ObjectsToSync);

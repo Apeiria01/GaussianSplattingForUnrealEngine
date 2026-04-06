@@ -135,6 +135,8 @@ namespace Spz {
 			CHECK_EQ(packed.rotations.size(), numPoints * 3);
 			CHECK_EQ(packed.alphas.size(), numPoints);
 			CHECK_EQ(packed.colors.size(), numPoints * 3);
+			CHECK_EQ(packed.shDegrees.size(), numPoints);
+			CHECK_EQ(packed.shCoeffs.size(), numPoints * GS_SH_REST_COUNT);
 			return true;
 		}
 
@@ -142,7 +144,7 @@ namespace Spz {
 
 		struct PackedGaussiansHeader {
 			uint32_t magic = 0x5053474e; // NGSP = Niantic gaussian splat
-			uint32_t version = 2;
+			uint32_t version = 3;
 			uint32_t numPoints = 0;
 			uint8_t shDegree = 0;
 			uint8_t fractionalBits = 0;
@@ -240,6 +242,8 @@ namespace Spz {
 		packed.rotations.resize(numPoints * 3);
 		packed.alphas.resize(numPoints);
 		packed.colors.resize(numPoints * 3);
+		packed.shDegrees.resize(numPoints);
+		packed.shCoeffs.resize(numPoints * GS_SH_REST_COUNT);
 
 		// Store coordinates as 24-bit fixed point values.
 		const float scale = (1 << packed.fractionalBits);
@@ -281,6 +285,13 @@ namespace Spz {
 			packed.colors[i * 3 + 0] = toUint8(Color[0] * (colorScale * 255.0f) + (0.5f * 255.0f));
 			packed.colors[i * 3 + 1] = toUint8(Color[1] * (colorScale * 255.0f) + (0.5f * 255.0f));
 			packed.colors[i * 3 + 2] = toUint8(Color[2] * (colorScale * 255.0f) + (0.5f * 255.0f));
+		}
+
+		for (size_t i = 0; i < numPoints; i++) {
+			packed.shDegrees[i] = static_cast<uint8_t>(FMath::Clamp(g[i].SHDegree, 0, 3));
+			for (int32 j = 0; j < GS_SH_REST_COUNT; j++) {
+				packed.shCoeffs[i * GS_SH_REST_COUNT + j] = g[i].SHCoeffs[j];
+			}
 		}
 		return packed;
 	}
@@ -424,13 +435,28 @@ namespace Spz {
 			result[i].Color.B = ((packed.colors[i * 3 + 2] / 255.0f) - 0.5f) / colorScale;
 		}
 
+		for (size_t i = 0; i < numPoints; i++) {
+			result[i].SHDegree = (i < packed.shDegrees.size()) ? packed.shDegrees[i] : 0;
+			for (int32 j = 0; j < GS_SH_REST_COUNT; j++) {
+				const size_t coeffIndex = i * GS_SH_REST_COUNT + j;
+				result[i].SHCoeffs[j] = (coeffIndex < packed.shCoeffs.size()) ? packed.shCoeffs[coeffIndex] : 0.0f;
+			}
+		}
+
 		return result;
 	}
 
 	void serializePackedGaussians(const PackedGaussians& packed,
 		std::ostream& out) {
+		uint8_t maxDegree = 0;
+		for (const uint8_t degree : packed.shDegrees) {
+			maxDegree = std::max(maxDegree, degree);
+		}
+
 		PackedGaussiansHeader header = {
+			.version = 3,
 			.numPoints = static_cast<uint32_t>(packed.numPoints),
+			.shDegree = maxDegree,
 			.fractionalBits = static_cast<uint8_t>(packed.fractionalBits),
 			.flags = static_cast<uint8_t>(0),
 		};
@@ -445,6 +471,10 @@ namespace Spz {
 			countBytes(packed.scales));
 		out.write(reinterpret_cast<const char*>(packed.rotations.data()),
 			countBytes(packed.rotations));
+		out.write(reinterpret_cast<const char*>(packed.shDegrees.data()),
+			countBytes(packed.shDegrees));
+		out.write(reinterpret_cast<const char*>(packed.shCoeffs.data()),
+			countBytes(packed.shCoeffs));
 	}
 
 	PackedGaussians deserializePackedGaussians(std::istream& in) {
@@ -456,7 +486,7 @@ namespace Spz {
 			SpzLog("[SPZ ERROR] deserializePackedGaussians: header not found");
 			return {};
 		}
-		if (header.version < 1 || header.version > 2) {
+		if (header.version < 1 || header.version > 3) {
 			SpzLog("[SPZ ERROR] deserializePackedGaussians: version not supported: %d",
 				header.version);
 			return {};
@@ -472,7 +502,6 @@ namespace Spz {
 			return {};
 		}
 		const int numPoints = header.numPoints;
-		const int shDim = dimForDegree(header.shDegree);
 		const bool usesFloat16 = header.version == 1;
 		PackedGaussians result = { .numPoints = numPoints,
 								  .fractionalBits = header.fractionalBits};
@@ -481,6 +510,8 @@ namespace Spz {
 		result.rotations.resize(numPoints * 3);
 		result.alphas.resize(numPoints);
 		result.colors.resize(numPoints * 3);
+		result.shDegrees.resize(numPoints, 0);
+		result.shCoeffs.resize(numPoints * GS_SH_REST_COUNT, 0.0f);
 		in.read(reinterpret_cast<char*>(result.positions.data()),
 			countBytes(result.positions));
 		in.read(reinterpret_cast<char*>(result.alphas.data()),
@@ -491,6 +522,12 @@ namespace Spz {
 			countBytes(result.scales));
 		in.read(reinterpret_cast<char*>(result.rotations.data()),
 			countBytes(result.rotations));
+		if (header.version >= 3) {
+			in.read(reinterpret_cast<char*>(result.shDegrees.data()),
+				countBytes(result.shDegrees));
+			in.read(reinterpret_cast<char*>(result.shCoeffs.data()),
+				countBytes(result.shCoeffs));
+		}
 		if (!in) {
 			SpzLog("[SPZ ERROR] deserializePackedGaussians: read error");
 			return {};
@@ -600,3 +637,4 @@ namespace Spz {
 		return true;
 	}
 } // namespace Spz
+

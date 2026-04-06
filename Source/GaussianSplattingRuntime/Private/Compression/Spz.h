@@ -30,8 +30,7 @@ struct PackedGaussian {
   UnpackedGaussian unpack(bool usesFloat16, int fractionalBits) const;
 };
 
-// Represents a full splat with lower precision. Each splat has at most 64 bytes, although splats
-// with fewer spherical harmonics degrees will have less. The data is stored non-interleaved.
+// Represents a full splat with lower precision. SH coefficients are preserved losslessly.
 struct PackedGaussians {
   int numPoints = 0;        // Total number of points (gaussians)
   int fractionalBits = 0;   // Number of bits used for fractional part of fixed-point coords
@@ -41,6 +40,8 @@ struct PackedGaussians {
   std::vector<uint8_t> rotations;
   std::vector<uint8_t> alphas;
   std::vector<uint8_t> colors;
+  std::vector<uint8_t> shDegrees; // one uint8 per point
+  std::vector<float> shCoeffs;    // numPoints * GS_SH_REST_COUNT
 
   bool usesFloat16() const;
   PackedGaussian at(int i) const;
@@ -64,4 +65,3 @@ GAUSSIANSPLATTINGRUNTIME_API bool decompress(
     TArray<FGaussianSplattingPoint>& output);
 
 }  // namespace Spz
-

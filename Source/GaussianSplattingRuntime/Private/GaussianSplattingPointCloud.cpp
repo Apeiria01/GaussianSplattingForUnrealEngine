@@ -16,8 +16,9 @@ FGaussianSplattingPoint::FGaussianSplattingPoint(FVector3f InPos /*= FVector3f::
 , Quat(InQuat)
 , Scale(InScale)
 , Color(InColor)
+, SHDegree(0)
 {
-
+	FMemory::Memzero(SHCoeffs, sizeof(SHCoeffs));
 }
 
 bool FGaussianSplattingPoint::operator<(const FGaussianSplattingPoint& Other) const
@@ -214,6 +215,13 @@ TArray<FGaussianSplattingPoint> ParseSplatFromStream(std::istream& in)
 		return Result;
 	}
 
+	// Determine SH degree from the number of rest coefficients found
+	int shDegree = 0;
+	if (shIdx.size() >= 45) shDegree = 3;
+	else if (shIdx.size() >= 24) shDegree = 2;
+	else if (shIdx.size() >= 9) shDegree = 1;
+	UE_LOG(LogTemp, Log, TEXT("SH degree: %d (%d rest coefficients)"), shDegree, (int)shIdx.size());
+
 	Result.SetNum(numPoints);
 
 	for (size_t i = 0; i < static_cast<size_t>(numPoints); i++) {
@@ -247,14 +255,22 @@ TArray<FGaussianSplattingPoint> ParseSplatFromStream(std::istream& in)
 
 		Point.Quat = FQuat4f(Quat.X, -Quat.Z, -Quat.Y, Quat.W);
 
-		// Color
-		FLinearColor Color = FLinearColor(
-			SH_0 * values[vertexOffset + colorIdx[0]] + 0.5f,
-			SH_0 * values[vertexOffset + colorIdx[1]] + 0.5f,
-			SH_0 * values[vertexOffset + colorIdx[2]] + 0.5f,
+		// Color: store raw DC coefficients (f_dc_0/1/2) + sigmoid alpha
+		// SH evaluation will be done on GPU using raw DC + rest coefficients
+		Point.Color = FLinearColor(
+			values[vertexOffset + colorIdx[0]],
+			values[vertexOffset + colorIdx[1]],
+			values[vertexOffset + colorIdx[2]],
 			1.0f / (1.0f + FMath::Exp(-values[vertexOffset + alphaIdx[0]]))
 		);
-		Point.Color = SRGBToLinear(Color);
+
+		// Spherical Harmonics rest coefficients
+		Point.SHDegree = shDegree;
+		FMemory::Memzero(Point.SHCoeffs, sizeof(Point.SHCoeffs));
+		for (int j = 0; j < shIdx.size() && j < GS_SH_REST_COUNT; j++)
+		{
+			Point.SHCoeffs[j] = values[vertexOffset + shIdx[j]];
+		}
 	}
 	return Result;
 }

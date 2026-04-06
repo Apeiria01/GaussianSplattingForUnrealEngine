@@ -26,6 +26,8 @@
 #include "JsonObjectConverter.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/EngineVersionComparison.h"
+#include "UObject/SavePackage.h"
 #include <string>
 #include <cmath>
 
@@ -91,7 +93,7 @@ UStaticMesh* UGaussianSplattingEditorLibrary::CreateStaticMeshFromPointCloud(UGa
 		NewMeshDescription.ReserveNewVertexInstances(VertexInstanceCount);
 		NewMeshDescription.ReserveNewPolygons(PolygonCount);
 		NewMeshDescription.ReserveNewEdges(PolygonCount * 2);
-		UVs.SetNumChannels(1);
+		UVs.SetNumChannels(2);
 		Colors.SetNumChannels(1);
 
 		FPolygonGroupID PolygonGroup0 = NewMeshDescription.CreatePolygonGroup();
@@ -140,14 +142,15 @@ UStaticMesh* UGaussianSplattingEditorLibrary::CreateStaticMeshFromPointCloud(UGa
 			VaildIndex++;
 
 			FVector2f SampleUV = (Coord + 0.5) * InvTextureDimension;
-			FLinearColor VertexColor = SRGBToLinear(FVector4f(SampleUV.X, 0, 0, SampleUV.Y));
 
-			Colors[VertexInstanceID0] = VertexColor;
-			Colors[VertexInstanceID1] = VertexColor;
-			Colors[VertexInstanceID2] = VertexColor;
-			Colors[VertexInstanceID3] = VertexColor;
-			Colors[VertexInstanceID4] = VertexColor;
-			Colors[VertexInstanceID5] = VertexColor;
+			// Store texture sample coordinates in UV1 (full 32-bit float precision)
+			// instead of VertexColor (8-bit quantization causes wrong texture lookups)
+			UVs.Set(VertexInstanceID0, 1, SampleUV);
+			UVs.Set(VertexInstanceID1, 1, SampleUV);
+			UVs.Set(VertexInstanceID2, 1, SampleUV);
+			UVs.Set(VertexInstanceID3, 1, SampleUV);
+			UVs.Set(VertexInstanceID4, 1, SampleUV);
+			UVs.Set(VertexInstanceID5, 1, SampleUV);
 
 			ScaleData.Append({
 				Point.Scale.X,
@@ -555,7 +558,17 @@ void UGaussianSplattingEditorLibrary::ImportPointClouds(UWorld* World, FString S
 		FAssetRegistryModule::AssetCreated(PointCloud);
 		FPackagePath PackagePath = FPackagePath::FromPackageNameChecked(NewPackage->GetName());
 		FString PackageLocalPath = PackagePath.GetLocalFullPath();
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 		UPackage::SavePackage(NewPackage, PointCloud, RF_Public | RF_Standalone, *PackageLocalPath, GError, nullptr, false, true, SAVE_NoError);
+#else
+		FSavePackageArgs SavePackageArgs;
+		SavePackageArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SavePackageArgs.SaveFlags = SAVE_NoError;
+		SavePackageArgs.Error = GError;
+		SavePackageArgs.bForceByteSwapping = false;
+		SavePackageArgs.bWarnOfLongFilename = true;
+		UPackage::SavePackage(NewPackage, PointCloud, *PackageLocalPath, SavePackageArgs);
+#endif
 
 		PointClouds.Add({ PointCloud, PlyInfo.Value.Location });
 	}
@@ -601,7 +614,7 @@ void UGaussianSplattingEditorLibrary::RepartitionPointClouds(UWorld* World, FStr
 			}
 		}
 	}
-	FBox2D TotalBound;
+	FBox2D TotalBound(ForceInit);
 	for (auto CloudPair : OldClouds) {
 		FVector BoxExtent = CloudPair.Value->CalcBounds().GetExtent();
 		FVector Location = CloudPair.Key->GetComponentLocation();
@@ -669,7 +682,17 @@ void UGaussianSplattingEditorLibrary::RepartitionPointClouds(UWorld* World, FStr
 			FAssetRegistryModule::AssetCreated(PointCloud);
 			FPackagePath PackagePath = FPackagePath::FromPackageNameChecked(Package->GetName());
 			FString PackageLocalPath = PackagePath.GetLocalFullPath();
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 			UPackage::SavePackage(Package, PointCloud, RF_Public | RF_Standalone, *PackageLocalPath, GError, nullptr, false, true, SAVE_NoError);
+#else
+			FSavePackageArgs SavePackageArgs;
+			SavePackageArgs.TopLevelFlags = RF_Public | RF_Standalone;
+			SavePackageArgs.SaveFlags = SAVE_NoError;
+			SavePackageArgs.Error = GError;
+			SavePackageArgs.bForceByteSwapping = false;
+			SavePackageArgs.bWarnOfLongFilename = true;
+			UPackage::SavePackage(Package, PointCloud, *PackageLocalPath, SavePackageArgs);
+#endif
 			RepartitionPointClouds.Add(PointCloud, CellLocation);
 		}
 	}

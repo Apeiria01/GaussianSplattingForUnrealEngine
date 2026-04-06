@@ -1,5 +1,5 @@
 ﻿#include "GaussianSplattingHLODBuilder.h"
-#include "Serialization/ArchiveCrc32.h"
+#include "WorldPartition/HLOD/HLODHashBuilder.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Kismet/GameplayStatics.h"
@@ -27,19 +27,27 @@ UGaussianSplattingHLODBuilderSettings::UGaussianSplattingHLODBuilderSettings(con
 	}
 }
 
-uint32 UGaussianSplattingHLODBuilderSettings::GetCRC() const
+void UGaussianSplattingHLODBuilderSettings::ComputeHLODHash(FHLODHashBuilder& InHashBuilder) const
 {
-	FArchiveCrc32 Ar;
-	FString HLODBaseKey = "1EC5FBC75A71412EB296F1E7E8411257";
-	Ar << HLODBaseKey;
+	const FString HLODBaseKey = TEXT("1EC5FBC75A71412EB296F1E7E8411257");
+	InHashBuilder.HashField(HLODBaseKey, TEXT("HLODBaseKey"));
+
 	TArray<uint8> Buffer;
 	FMemoryWriter SettingsAr(Buffer, true);
-	CaptureSettings->SerializeScriptProperties(SettingsAr);
-	SparseReconstructionSettings->SerializeScriptProperties(SettingsAr);
-	GaussianSplattingEditorSettings->SerializeScriptProperties(SettingsAr);
-	Ar << Buffer;
-	uint32 Hash = Ar.GetCrc();
-	return Hash;
+	if (CaptureSettings)
+	{
+		CaptureSettings->SerializeScriptProperties(SettingsAr);
+	}
+	if (SparseReconstructionSettings)
+	{
+		SparseReconstructionSettings->SerializeScriptProperties(SettingsAr);
+	}
+	if (GaussianSplattingEditorSettings)
+	{
+		GaussianSplattingEditorSettings->SerializeScriptProperties(SettingsAr);
+	}
+
+	InHashBuilder << Buffer;
 }
 
 UGaussianSplattingHLODBuilder::UGaussianSplattingHLODBuilder(const FObjectInitializer& ObjectInitializer)

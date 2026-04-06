@@ -1,0 +1,42 @@
+# Unreal Engine generated folders (project root)
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+/LocalBuilds/
+
+# Unreal Engine generated folders (plugins)
+/Plugins/**/Binaries/
+/Plugins/**/DerivedDataCache/
+/Plugins/**/Intermediate/
+/Plugins/**/Saved/
+
+# Generated project files
+/*.sln
+/*.xcodeproj
+/*.xcworkspace
+/compile_commands.json
+/CMakeLists.txt
+/Makefile
+
+# IDE/editor files
+/.vs/
+/.vscode/
+/.idea/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userprefs
+*.csproj.user
+*.vcxproj.user
+*.sln.docstates
+*.DotSettings.user
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and crash dumps
+*.log
+*.dmp

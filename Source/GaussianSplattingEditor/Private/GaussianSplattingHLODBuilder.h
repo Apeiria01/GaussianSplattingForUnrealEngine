@@ -9,7 +9,7 @@ class UGaussianSplattingHLODBuilderSettings : public UHLODBuilderSettings
 {
 	GENERATED_UCLASS_BODY()
 
-	uint32 GetCRC() const override;
+	virtual void ComputeHLODHash(FHLODHashBuilder& InHashBuilder) const override;
 
 public:
 	UPROPERTY(VisibleAnywhere, Instanced, NoClear, meta = (EditInline), Category = "Gaussian Splatting")

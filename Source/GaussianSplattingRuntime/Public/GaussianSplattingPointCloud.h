@@ -12,6 +12,11 @@ enum class EGaussianSplattingCompressionMethod : uint8
 	Zlib,
 };
 
+// Number of SH rest coefficients: 15 basis functions x 3 color channels = 45
+#define GS_SH_REST_COUNT 45
+// Number of float4 slots per point in GPU buffer: 4 (base) + 12 (SH) = 16
+#define GS_GPU_FLOAT4S_PER_POINT 16
+
 USTRUCT(BlueprintType, meta = (DisplayName = "Gaussian Splatting Point"))
 struct GAUSSIANSPLATTINGRUNTIME_API FGaussianSplattingPoint
 {
@@ -29,6 +34,13 @@ public:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Gaussian Splatting")
 	FLinearColor Color;
 
+	// Spherical Harmonics rest coefficients (f_rest_0..44)
+	// Layout: interleaved [basis0_R, basis0_G, basis0_B, basis1_R, basis1_G, basis1_B, ...]
+	float SHCoeffs[GS_SH_REST_COUNT];
+
+	// SH degree: 0=DC only, 1=+3 basis, 2=+8 basis, 3=+15 basis (full)
+	int32 SHDegree;
+
 	FGaussianSplattingPoint(FVector3f InPos = FVector3f::ZeroVector, FQuat4f InQuat = FQuat4f::Identity, FVector3f InScale = {1,1,1}, FLinearColor InColor = FLinearColor::Black);
 
 	bool operator==(const FGaussianSplattingPoint& Other)const;
@@ -45,6 +57,12 @@ public:
 		Ar << Point.Quat;
 		Ar << Point.Scale;
 		Ar << Point.Color;
+		// Serialize SH data
+		for (int32 i = 0; i < GS_SH_REST_COUNT; i++)
+		{
+			Ar << Point.SHCoeffs[i];
+		}
+		Ar << Point.SHDegree;
 		return Ar;
 	}
 };

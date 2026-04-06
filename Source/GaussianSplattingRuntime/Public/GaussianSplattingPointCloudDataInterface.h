@@ -43,6 +43,7 @@ protected:
 	friend struct FNiagaraDataInterfaceProxyGaussianSplattingPointCloud;
 
 	static const FName GetPointDataFunctionName;
+	static const FName GetPointDataSHFunctionName;
 	static const FName GetPointCountFunctionName;
 
 	static const FString PointCountName;

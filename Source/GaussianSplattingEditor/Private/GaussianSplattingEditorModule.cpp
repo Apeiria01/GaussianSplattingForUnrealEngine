@@ -13,6 +13,8 @@
 #include "GaussianSplattingEditorLibrary.h"
 #include "IContentBrowserSingleton.h"
 #include "NiagaraEditorStyle.h"
+#include "Misc/EngineVersionComparison.h"
+#include "UObject/SavePackage.h"
 
 
 #define LOCTEXT_NAMESPACE "GaussianSplatting"
@@ -61,15 +63,15 @@ void FGaussianSplattingEditorModule::RegisterMenus()
 						)
 					);
 
-					//Section.AddMenuEntry(
-					//	"GS_CreateStaticMesh",
-					//	LOCTEXT("GS_CreateStaticMesh", "Create Static Mesh"),
-					//	LOCTEXT("GS_CreateStaticMeshTooltip", "Create Static Mesh"),
-					//	FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.StaticMeshActor"),
-					//	FUIAction(
-					//		FExecuteAction::CreateRaw(this, &FGaussianSplattingEditorModule::CreateStaticMesh, PointCloud)
-					//	)
-					//);
+					Section.AddMenuEntry(
+						"GS_CreateStaticMesh",
+						LOCTEXT("GS_CreateStaticMesh", "Create Static Mesh"),
+						LOCTEXT("GS_CreateStaticMeshTooltip", "Create Static Mesh"),
+						FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.StaticMeshActor"),
+						FUIAction(
+							FExecuteAction::CreateRaw(this, &FGaussianSplattingEditorModule::CreateStaticMesh, PointCloud)
+						)
+					);
 				}
 			}
 		}));
@@ -105,7 +107,17 @@ void FGaussianSplattingEditorModule::CreateStaticMesh(UGaussianSplattingPointClo
 		FAssetRegistryModule::AssetCreated(NewAsset);
 		FPackagePath NewPackagePath = FPackagePath::FromPackageNameChecked(NewPackage->GetName());
 		FString PackageLocalPath = NewPackagePath.GetLocalFullPath();
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 		UPackage::SavePackage(NewPackage, NewAsset, RF_Public | RF_Standalone, *PackageLocalPath, GError, nullptr, false, true, SAVE_NoError);
+#else
+		FSavePackageArgs SavePackageArgs;
+		SavePackageArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SavePackageArgs.SaveFlags = SAVE_NoError;
+		SavePackageArgs.Error = GError;
+		SavePackageArgs.bForceByteSwapping = false;
+		SavePackageArgs.bWarnOfLongFilename = true;
+		UPackage::SavePackage(NewPackage, NewAsset, *PackageLocalPath, SavePackageArgs);
+#endif
 		TArray<UObject*> ObjectsToSync;
 		ObjectsToSync.Add(NewAsset);
 		GEditor->SyncBrowserToObjects(ObjectsToSync);
@@ -143,7 +155,17 @@ void FGaussianSplattingEditorModule::CreateNiagara(UGaussianSplattingPointCloud*
 		FAssetRegistryModule::AssetCreated(NewAsset);
 		FPackagePath NewPackagePath = FPackagePath::FromPackageNameChecked(NewPackage->GetName());
 		FString PackageLocalPath = NewPackagePath.GetLocalFullPath();
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
 		UPackage::SavePackage(NewPackage, NewAsset, RF_Public | RF_Standalone, *PackageLocalPath, GError, nullptr, false, true, SAVE_NoError);
+#else
+		FSavePackageArgs SavePackageArgs;
+		SavePackageArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SavePackageArgs.SaveFlags = SAVE_NoError;
+		SavePackageArgs.Error = GError;
+		SavePackageArgs.bForceByteSwapping = false;
+		SavePackageArgs.bWarnOfLongFilename = true;
+		UPackage::SavePackage(NewPackage, NewAsset, *PackageLocalPath, SavePackageArgs);
+#endif
 		TArray<UObject*> ObjectsToSync;
 		ObjectsToSync.Add(NewAsset);
 		GEditor->SyncBrowserToObjects(ObjectsToSync);
