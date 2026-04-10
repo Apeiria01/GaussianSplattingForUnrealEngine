@@ -41,8 +41,9 @@ public class GaussianSplattingRuntime: ModuleRules
 				"Slate",
                 "SlateCore",
                 "Niagara",
+                "NiagaraVertexFactories",
                 "NiagaraShader",
-                "zlib"
+                "zlib",
             }
             );
     }

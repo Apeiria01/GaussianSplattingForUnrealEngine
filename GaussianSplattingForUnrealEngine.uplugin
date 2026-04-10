@@ -14,20 +14,18 @@
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
 	"Installed": false,
-	"SupportedTargetPlatforms": [
-		"Win64",
-		"Linux"
-	],
 	"Modules": [
 		{
 			"Name": "GaussianSplattingRuntime",
 			"Type": "Runtime",
-			"LoadingPhase": "PostConfigInit"
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [ "Win64", "Android" ]
 		},
 		{
 			"Name": "GaussianSplattingEditor",
 			"Type": "Editor",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
 		}
 	],
 	"Plugins": [

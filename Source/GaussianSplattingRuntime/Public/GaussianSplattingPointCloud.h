@@ -5,7 +5,7 @@
 #include "GaussianSplattingPointCloud.generated.h"
 
 
-UENUM() 
+UENUM()
 enum class EGaussianSplattingCompressionMethod : uint8
 {
 	None,
@@ -14,8 +14,8 @@ enum class EGaussianSplattingCompressionMethod : uint8
 
 // Number of SH rest coefficients: 15 basis functions x 3 color channels = 45
 #define GS_SH_REST_COUNT 45
-// Number of float4 slots per point in GPU buffer: 4 (base) + 12 (SH) = 16
-#define GS_GPU_FLOAT4S_PER_POINT 16
+// Number of packed SH float4 slots per point in GPU SoA SHRest buffer
+#define GS_GPU_SH_FLOAT4S_PER_POINT 12
 
 USTRUCT(BlueprintType, meta = (DisplayName = "Gaussian Splatting Point"))
 struct GAUSSIANSPLATTINGRUNTIME_API FGaussianSplattingPoint
@@ -91,8 +91,17 @@ public:
 
 	void SetCompressionMethod(EGaussianSplattingCompressionMethod val) { CompressionMethod = val; }
 
+	// SoA views aligned with SIBR-style field granularity.
+	const TArray<FVector3f>& GetPositionsSOA() const { return PositionsSOA; }
+	const TArray<FQuat4f>& GetQuatsSOA() const { return QuatsSOA; }
+	const TArray<FVector3f>& GetScalesSOA() const { return ScalesSOA; }
+	const TArray<FLinearColor>& GetColorsSOA() const { return ColorsSOA; }
+	const TArray<int32>& GetSHDegreesSOA() const { return SHDegreesSOA; }
+	const TArray<float>& GetSHCoeffsSOA() const { return SHCoeffsSOA; }
+
 private:
 	void Serialize(FArchive& Ar) override;
+	void RebuildSoACache();
 
 private:
 	UPROPERTY(EditAnywhere, Category = "Gaussian Splatting")
@@ -103,4 +112,12 @@ private:
 
 	UPROPERTY()
 	uint32 FeatureLevel = 64;
+
+	// Runtime SoA cache rebuilt from Points.
+	TArray<FVector3f> PositionsSOA;
+	TArray<FQuat4f> QuatsSOA;
+	TArray<FVector3f> ScalesSOA;
+	TArray<FLinearColor> ColorsSOA;
+	TArray<int32> SHDegreesSOA;
+	TArray<float> SHCoeffsSOA;
 };

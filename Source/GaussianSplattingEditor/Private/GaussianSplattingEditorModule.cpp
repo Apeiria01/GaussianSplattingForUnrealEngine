@@ -1,4 +1,4 @@
-#include "GaussianSplattingEditorModule.h"
+﻿#include "GaussianSplattingEditorModule.h"
 #include "EditorModeRegistry.h"
 #include "GaussianSplattingEdMode.h"
 #include "GaussianSplattingEditorStyle.h"
@@ -13,9 +13,10 @@
 #include "GaussianSplattingEditorLibrary.h"
 #include "IContentBrowserSingleton.h"
 #include "NiagaraEditorStyle.h"
+#include "NiagaraEditorModule.h"
+#include "GaussianNiagaraSpriteRendererProperties.h"
 #include "Misc/EngineVersionComparison.h"
 #include "UObject/SavePackage.h"
-
 
 #define LOCTEXT_NAMESPACE "GaussianSplatting"
 
@@ -30,16 +31,50 @@ void FGaussianSplattingEditorModule::StartupModule()
 	);
 
 	FGaussianSplattingEditorStyle::Initialize();
-	FGaussianSplattingEditorStyle::ReloadTextures();    
+	FGaussianSplattingEditorStyle::ReloadTextures();
+	RegisterNiagaraRendererFactory();
 	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FGaussianSplattingEditorModule::RegisterMenus));
 }
 
 void FGaussianSplattingEditorModule::ShutdownModule()
 {
+	bNiagaraRendererFactoryRegistered = false;
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
 	FGaussianSplattingEditorStyle::Shutdown();
 	FEditorModeRegistry::Get().UnregisterMode(FGaussianSplattingEdMode::EdID);
+}
+
+void FGaussianSplattingEditorModule::RegisterNiagaraRendererFactory()
+{
+	if (bNiagaraRendererFactoryRegistered)
+	{
+		return;
+	}
+
+	FNiagaraEditorModule& NiagaraEditorModule = FModuleManager::LoadModuleChecked<FNiagaraEditorModule>("NiagaraEditor");
+	const FTopLevelAssetPath RendererClassPath = UGaussianNiagaraSpriteRendererProperties::StaticClass()->GetClassPathName();
+
+	for (const FNiagaraRendererCreationInfo& RendererInfo : NiagaraEditorModule.GetRendererCreationInfos())
+	{
+		if (RendererInfo.RendererClassPath == RendererClassPath)
+		{
+			bNiagaraRendererFactoryRegistered = true;
+			return;
+		}
+	}
+
+	NiagaraEditorModule.RegisterRendererCreationInfo(FNiagaraRendererCreationInfo(
+		UGaussianNiagaraSpriteRendererProperties::StaticClass()->GetDisplayNameText(),
+		FText::FromString(UGaussianNiagaraSpriteRendererProperties::StaticClass()->GetDescription()),
+		RendererClassPath,
+		FNiagaraRendererCreationInfo::FRendererFactory::CreateLambda([](UObject* OuterEmitter) -> UNiagaraRendererProperties*
+		{
+			return NewObject<UGaussianNiagaraSpriteRendererProperties>(OuterEmitter, NAME_None, RF_Transactional);
+		})
+	));
+
+	bNiagaraRendererFactoryRegistered = true;
 }
 
 void FGaussianSplattingEditorModule::RegisterMenus()

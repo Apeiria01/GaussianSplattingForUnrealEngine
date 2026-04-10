@@ -20,7 +20,14 @@ struct FNiagaraDataInterfaceProxyGaussianSplattingPointCloud : public FNiagaraDa
 	TObjectPtr<class UNiagaraDataInterfaceGaussianSplattingPointCloud> Owner = nullptr;
 	TObjectPtr<class UGaussianSplattingPointCloud> PointCloud;
 	bool bDirty = false;
-	FReadBuffer GaussianPointDataBuffer;
+
+	// SIBR-aligned SoA GPU buffers.
+	FReadBuffer PositionDegreeBuffer; // position.xyz + SH degree
+	FReadBuffer RotationBuffer;       // quat.xyzw
+	FReadBuffer ScaleOpacityBuffer;   // scale.xyz + opacity
+	FReadBuffer ColorBuffer;          // raw DC color.rgb + alpha (kept for compatibility)
+	FReadBuffer SHRestBuffer;         // 12 float4s per point for 45 rest coefficients
+
 	FCriticalSection BufferLock;
 };
 
@@ -30,8 +37,12 @@ class GAUSSIANSPLATTINGRUNTIME_API UNiagaraDataInterfaceGaussianSplattingPointCl
 	GENERATED_UCLASS_BODY()
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FShaderParameters, )
-		SHADER_PARAMETER(int,	PointCount)
-		SHADER_PARAMETER_SRV(Buffer<float4>, PointDataBuffer)
+		SHADER_PARAMETER(int, PointCount)
+		SHADER_PARAMETER_SRV(Buffer<float4>, PositionDegreeBuffer)
+		SHADER_PARAMETER_SRV(Buffer<float4>, RotationBuffer)
+		SHADER_PARAMETER_SRV(Buffer<float4>, ScaleOpacityBuffer)
+		SHADER_PARAMETER_SRV(Buffer<float4>, ColorBuffer)
+		SHADER_PARAMETER_SRV(Buffer<float4>, SHRestBuffer)
 	END_SHADER_PARAMETER_STRUCT()
 public:
 	void SetPointCloud(UGaussianSplattingPointCloud* InPointCloud);
@@ -47,7 +58,11 @@ protected:
 	static const FName GetPointCountFunctionName;
 
 	static const FString PointCountName;
-	static const FString PointDataBufferName;
+	static const FString PositionDegreeBufferName;
+	static const FString RotationBufferName;
+	static const FString ScaleOpacityBufferName;
+	static const FString ColorBufferName;
+	static const FString SHRestBufferName;
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Gaussian Splatting")
 	TObjectPtr<UGaussianSplattingPointCloud> PointCloud;

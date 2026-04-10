@@ -32,9 +32,27 @@ FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::FNiagaraDataInterfaceProx
 
 FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::~FNiagaraDataInterfaceProxyGaussianSplattingPointCloud()
 {
-
+	if (PositionDegreeBuffer.NumBytes > 0)
+	{
+		PositionDegreeBuffer.Release();
+	}
+	if (RotationBuffer.NumBytes > 0)
+	{
+		RotationBuffer.Release();
+	}
+	if (ScaleOpacityBuffer.NumBytes > 0)
+	{
+		ScaleOpacityBuffer.Release();
+	}
+	if (ColorBuffer.NumBytes > 0)
+	{
+		ColorBuffer.Release();
+	}
+	if (SHRestBuffer.NumBytes > 0)
+	{
+		SHRestBuffer.Release();
+	}
 }
-
 void FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::MakeBufferDirty()
 {
 	bDirty = true;
@@ -59,72 +77,109 @@ void FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::TryUpdateBuffer()
 
 void FNiagaraDataInterfaceProxyGaussianSplattingPointCloud::PostDataToGPU()
 {
-	if (Owner == nullptr || Owner->PointCloud == nullptr) {
+	if (Owner == nullptr || Owner->PointCloud == nullptr)
+	{
 		return;
 	}
-	const TArray<FGaussianSplattingPoint>& Points = Owner->PointCloud->GetPoints();
 
-	// GPU buffer layout: GS_GPU_FLOAT4S_PER_POINT (16) float4 per point
-	//  [0]  Position.xyz, SHDegree (as float)
-	//  [1]  Quat.xyzw
-	//  [2]  Scale.xyz, pad
-	//  [3]  Color(DC raw).rgb, Alpha
-	//  [4]  SHCoeffs[ 0.. 3]
-	//  [5]  SHCoeffs[ 4.. 7]
-	//  [6]  SHCoeffs[ 8..11]
-	//  [7]  SHCoeffs[12..15]
-	//  [8]  SHCoeffs[16..19]
-	//  [9]  SHCoeffs[20..23]
-	//  [10] SHCoeffs[24..27]
-	//  [11] SHCoeffs[28..31]
-	//  [12] SHCoeffs[32..35]
-	//  [13] SHCoeffs[36..39]
-	//  [14] SHCoeffs[40..43]
-	//  [15] SHCoeffs[44], pad, pad, pad
-	const int32 Float4sPerPoint = GS_GPU_FLOAT4S_PER_POINT;
-	TArray<FVector4f> PointData;
-	PointData.SetNum(Points.Num() * Float4sPerPoint);
-	for (int i = 0; i < Points.Num(); i++) {
-		const FGaussianSplattingPoint& Point = Points[i];
-		int32 Base = i * Float4sPerPoint;
-		PointData[Base + 0] = FVector4f(Point.Position.X, Point.Position.Y, Point.Position.Z, (float)Point.SHDegree);
-		PointData[Base + 1] = FVector4f(Point.Quat.X, Point.Quat.Y, Point.Quat.Z, Point.Quat.W);
-		PointData[Base + 2] = FVector4f(Point.Scale.X, Point.Scale.Y, Point.Scale.Z, 0.0f);
-		PointData[Base + 3] = FVector4f(Point.Color.R, Point.Color.G, Point.Color.B, Point.Color.A);
+	const UGaussianSplattingPointCloud* SourcePointCloud = Owner->PointCloud;
+	const int32 NumPoints = SourcePointCloud->GetPointCount();
+	const TArray<FVector3f>& Positions = SourcePointCloud->GetPositionsSOA();
+	const TArray<FQuat4f>& Quats = SourcePointCloud->GetQuatsSOA();
+	const TArray<FVector3f>& Scales = SourcePointCloud->GetScalesSOA();
+	const TArray<FLinearColor>& Colors = SourcePointCloud->GetColorsSOA();
+	const TArray<int32>& SHDegrees = SourcePointCloud->GetSHDegreesSOA();
+	const TArray<float>& SHCoeffs = SourcePointCloud->GetSHCoeffsSOA();
 
-		// Pack 45 SH coefficients into 12 float4 slots (indices 4..15)
-		
-		for (int32 j = 0; j < 12; j++)
+	if (Positions.Num() != NumPoints ||
+		Quats.Num() != NumPoints ||
+		Scales.Num() != NumPoints ||
+		Colors.Num() != NumPoints ||
+		SHDegrees.Num() != NumPoints ||
+		SHCoeffs.Num() != NumPoints * GS_SH_REST_COUNT)
+	{
+		return;
+	}
+
+	TArray<FVector4f> PositionDegreeData;
+	TArray<FVector4f> RotationData;
+	TArray<FVector4f> ScaleOpacityData;
+	TArray<FVector4f> ColorData;
+	TArray<FVector4f> SHRestData;
+
+	PositionDegreeData.SetNumUninitialized(NumPoints);
+	RotationData.SetNumUninitialized(NumPoints);
+	ScaleOpacityData.SetNumUninitialized(NumPoints);
+	ColorData.SetNumUninitialized(NumPoints);
+	SHRestData.SetNumUninitialized(NumPoints * GS_GPU_SH_FLOAT4S_PER_POINT);
+
+	for (int32 PointIndex = 0; PointIndex < NumPoints; ++PointIndex)
+	{
+		const FVector3f& Position = Positions[PointIndex];
+		const FQuat4f& Quat = Quats[PointIndex];
+		const FVector3f& Scale = Scales[PointIndex];
+		const FLinearColor& Color = Colors[PointIndex];
+		const int32 SHDegree = SHDegrees[PointIndex];
+
+		PositionDegreeData[PointIndex] = FVector4f(Position.X, Position.Y, Position.Z, (float)SHDegree);
+		RotationData[PointIndex] = FVector4f(Quat.X, Quat.Y, Quat.Z, Quat.W);
+		ScaleOpacityData[PointIndex] = FVector4f(Scale.X, Scale.Y, Scale.Z, Color.A);
+		ColorData[PointIndex] = FVector4f(Color.R, Color.G, Color.B, Color.A);
+
+		const int32 SHSrcBase = PointIndex * GS_SH_REST_COUNT;
+		const int32 SHDstBase = PointIndex * GS_GPU_SH_FLOAT4S_PER_POINT;
+		for (int32 SlotIndex = 0; SlotIndex < GS_GPU_SH_FLOAT4S_PER_POINT; ++SlotIndex)
 		{
-			float v0 = (j * 4 + 0 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 0] : 0.0f;
-			float v1 = (j * 4 + 1 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 1] : 0.0f;
-			float v2 = (j * 4 + 2 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 2] : 0.0f;
-			float v3 = (j * 4 + 3 < GS_SH_REST_COUNT) ? Point.SHCoeffs[j * 4 + 3] : 0.0f;
-			PointData[Base + 4 + j] = FVector4f(v0, v1, v2, v3);
+			const int32 CoeffBase = SHSrcBase + SlotIndex * 4;
+			const float C0 = (CoeffBase + 0 < SHSrcBase + GS_SH_REST_COUNT) ? SHCoeffs[CoeffBase + 0] : 0.0f;
+			const float C1 = (CoeffBase + 1 < SHSrcBase + GS_SH_REST_COUNT) ? SHCoeffs[CoeffBase + 1] : 0.0f;
+			const float C2 = (CoeffBase + 2 < SHSrcBase + GS_SH_REST_COUNT) ? SHCoeffs[CoeffBase + 2] : 0.0f;
+			const float C3 = (CoeffBase + 3 < SHSrcBase + GS_SH_REST_COUNT) ? SHCoeffs[CoeffBase + 3] : 0.0f;
+			SHRestData[SHDstBase + SlotIndex] = FVector4f(C0, C1, C2, C3);
 		}
 	}
 
-	ENQUEUE_RENDER_COMMAND(FUpdateSpectrumBuffer)(
-		[this, PointData](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(FUpdateGaussianSplattingPointCloudBuffers)(
+		[this, PositionDegreeData, RotationData, ScaleOpacityData, ColorData, SHRestData](FRHICommandListImmediate& RHICmdList)
 		{
-			const int32 NumBytesInBuffer = sizeof(FVector4f) * PointData.Num();
+			FScopeLock ScopeLock(&BufferLock);
 
-			if (NumBytesInBuffer != GaussianPointDataBuffer.NumBytes){
-				if (GaussianPointDataBuffer.NumBytes > 0)
-					GaussianPointDataBuffer.Release();
-				if (NumBytesInBuffer > 0)
-					GaussianPointDataBuffer.Initialize(RHICmdList, TEXT("FNiagaraDataInterfaceProxySpectrum_PositionBuffer"), sizeof(FVector4f), PointData.Num(), EPixelFormat::PF_A32B32G32R32F, BUF_Static);
-			}
+			auto UploadBuffer = [&RHICmdList](FReadBuffer& Buffer, const TCHAR* DebugName, const TArray<FVector4f>& Data)
+			{
+				const uint32 NumBytesInBuffer = sizeof(FVector4f) * Data.Num();
+				if (NumBytesInBuffer != Buffer.NumBytes)
+				{
+					if (Buffer.NumBytes > 0)
+					{
+						Buffer.Release();
+					}
+					if (NumBytesInBuffer > 0)
+					{
+						Buffer.Initialize(
+							RHICmdList,
+							DebugName,
+							sizeof(FVector4f),
+							Data.Num(),
+							EPixelFormat::PF_A32B32G32R32F,
+							BUF_Static);
+					}
+				}
 
-			if (GaussianPointDataBuffer.NumBytes > 0){
-				float* BufferData = static_cast<float*>(RHICmdList.LockBuffer(GaussianPointDataBuffer.Buffer, 0, NumBytesInBuffer, EResourceLockMode::RLM_WriteOnly));
-				FScopeLock ScopeLock(&BufferLock);
-				FPlatformMemory::Memcpy(BufferData, PointData.GetData(), NumBytesInBuffer);
-				RHICmdList.UnlockBuffer(GaussianPointDataBuffer.Buffer);
-			}
+				if (NumBytesInBuffer > 0 && Buffer.NumBytes > 0)
+				{
+					void* BufferData = RHICmdList.LockBuffer(Buffer.Buffer, 0, NumBytesInBuffer, EResourceLockMode::RLM_WriteOnly);
+					FPlatformMemory::Memcpy(BufferData, Data.GetData(), NumBytesInBuffer);
+					RHICmdList.UnlockBuffer(Buffer.Buffer);
+				}
+			};
+
+			UploadBuffer(PositionDegreeBuffer, TEXT("FNiagaraDataInterfaceGaussianSplatting_PositionDegreeBuffer"), PositionDegreeData);
+			UploadBuffer(RotationBuffer, TEXT("FNiagaraDataInterfaceGaussianSplatting_RotationBuffer"), RotationData);
+			UploadBuffer(ScaleOpacityBuffer, TEXT("FNiagaraDataInterfaceGaussianSplatting_ScaleOpacityBuffer"), ScaleOpacityData);
+			UploadBuffer(ColorBuffer, TEXT("FNiagaraDataInterfaceGaussianSplatting_ColorBuffer"), ColorData);
+			UploadBuffer(SHRestBuffer, TEXT("FNiagaraDataInterfaceGaussianSplatting_SHRestBuffer"), SHRestData);
 		});
 }
-
 UNiagaraDataInterfaceGaussianSplattingPointCloud::UNiagaraDataInterfaceGaussianSplattingPointCloud(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
 
@@ -219,13 +274,13 @@ UGaussianSplattingPointCloud* UNiagaraDataInterfaceGaussianSplattingPointCloud::
 void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointCount(FVectorVMExternalFunctionContext& Context)
 {
 	VectorVM::FExternalFuncRegisterHandler<int32> OutPointCount(Context);
+	const int32 Count = PointCloud ? PointCloud->GetPointCount() : 0;
 
 	for (int32 InstanceIdx = 0; InstanceIdx < Context.GetNumInstances(); ++InstanceIdx)
 	{
-		*OutPointCount.GetDestAndAdvance() = PointCloud->GetPoints().Num();
+		*OutPointCount.GetDestAndAdvance() = Count;
 	}
 }
-
 void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointData(FVectorVMExternalFunctionContext& Context)
 {
 	VectorVM::FExternalFuncInputHandler<int32> InIndex(Context);
@@ -247,27 +302,48 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointData(FVectorVMExt
 	VectorVM::FExternalFuncRegisterHandler<float> ColorB(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> ColorA(Context);
 
-	auto Points = PointCloud->GetPoints();
-	for (int32 InstanceIdx = 0; InstanceIdx < Context.GetNumInstances(); ++InstanceIdx){
-		int32 Index = InIndex.Get();
-		FGaussianSplattingPoint& Point = Points[Index];
-		*PosX.GetDest() = Point.Position.X;
-		*PosX.GetDest() = Point.Position.X;
-		*PosX.GetDest() = Point.Position.X;
+	const TArray<FVector3f>* PositionsPtr = PointCloud ? &PointCloud->GetPositionsSOA() : nullptr;
+	const TArray<FQuat4f>* QuatsPtr = PointCloud ? &PointCloud->GetQuatsSOA() : nullptr;
+	const TArray<FVector3f>* ScalesPtr = PointCloud ? &PointCloud->GetScalesSOA() : nullptr;
+	const TArray<FLinearColor>* ColorsPtr = PointCloud ? &PointCloud->GetColorsSOA() : nullptr;
+	const int32 NumPoints = PositionsPtr ? PositionsPtr->Num() : 0;
 
-		*QuatX.GetDest() = Point.Quat.X;
-		*QuatY.GetDest() = Point.Quat.Y;
-		*QuatZ.GetDest() = Point.Quat.Z;
-		*QuatZ.GetDest() = Point.Quat.Z;
+	for (int32 InstanceIdx = 0; InstanceIdx < Context.GetNumInstances(); ++InstanceIdx)
+	{
+		const int32 Index = InIndex.Get();
 
-		*ScaleX.GetDest() = Point.Scale.X;
-		*ScaleY.GetDest() = Point.Scale.Y;
-		*ScaleZ.GetDest() = Point.Scale.Z;
+		FVector3f Position = FVector3f::ZeroVector;
+		FQuat4f Quat = FQuat4f::Identity;
+		FVector3f Scale = FVector3f(1.0f, 1.0f, 1.0f);
+		FLinearColor Color = FLinearColor::Black;
 
-		*ColorR.GetDest() = Point.Color.R;
-		*ColorG.GetDest() = Point.Color.G;
-		*ColorB.GetDest() = Point.Color.B;
-		*ColorA.GetDest() = Point.Color.A;
+		if (NumPoints > 0 && QuatsPtr && ScalesPtr && ColorsPtr &&
+			QuatsPtr->Num() == NumPoints && ScalesPtr->Num() == NumPoints && ColorsPtr->Num() == NumPoints)
+		{
+			const int32 SafeIndex = FMath::Clamp(Index, 0, NumPoints - 1);
+			Position = (*PositionsPtr)[SafeIndex];
+			Quat = (*QuatsPtr)[SafeIndex];
+			Scale = (*ScalesPtr)[SafeIndex];
+			Color = (*ColorsPtr)[SafeIndex];
+		}
+
+		*PosX.GetDest() = Position.X;
+		*PosY.GetDest() = Position.Y;
+		*PosZ.GetDest() = Position.Z;
+
+		*QuatX.GetDest() = Quat.X;
+		*QuatY.GetDest() = Quat.Y;
+		*QuatZ.GetDest() = Quat.Z;
+		*QuatW.GetDest() = Quat.W;
+
+		*ScaleX.GetDest() = Scale.X;
+		*ScaleY.GetDest() = Scale.Y;
+		*ScaleZ.GetDest() = Scale.Z;
+
+		*ColorR.GetDest() = Color.R;
+		*ColorG.GetDest() = Color.G;
+		*ColorB.GetDest() = Color.B;
+		*ColorA.GetDest() = Color.A;
 
 		InIndex.Advance();
 
@@ -278,7 +354,7 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointData(FVectorVMExt
 		QuatX.Advance();
 		QuatY.Advance();
 		QuatZ.Advance();
-		QuatZ.Advance();
+		QuatW.Advance();
 
 		ScaleX.Advance();
 		ScaleY.Advance();
@@ -290,7 +366,6 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointData(FVectorVMExt
 		ColorA.Advance();
 	}
 }
-
 void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction& OutFunc)
 {
 	if (BindingInfo.Name == GetPointDataFunctionName){
@@ -330,18 +405,23 @@ bool UNiagaraDataInterfaceGaussianSplattingPointCloud::GetFunctionHLSL(const FNi
 			void {FunctionName}(int In_PointIndex, out float3 Out_Position, out float4 Out_Quat, out float3 Out_Scale, out float4 Out_Color)
 			{
 				int PointIndex = In_PointIndex < {PointCount} ? In_PointIndex : {PointCount} - 1;
-				int Base = PointIndex * 16;
-				Out_Position = {PointDataBuffer}.Load(Base + 0).xyz;
-				Out_Quat     = {PointDataBuffer}.Load(Base + 1);
-				Out_Scale    = {PointDataBuffer}.Load(Base + 2).xyz;
-				Out_Color    = {PointDataBuffer}.Load(Base + 3);
+				float4 PositionDegree = {PositionDegreeBuffer}.Load(PointIndex);
+				float4 ScaleOpacity = {ScaleOpacityBuffer}.Load(PointIndex);
+				Out_Position = PositionDegree.xyz;
+				Out_Quat = {RotationBuffer}.Load(PointIndex);
+				Out_Scale = ScaleOpacity.xyz;
+				Out_Color = {ColorBuffer}.Load(PointIndex);
+				Out_Color.w = ScaleOpacity.w;
 			}
 		)");
 
 		TMap<FString, FStringFormatArg> ArgsBounds = {
 			{TEXT("FunctionName"), FStringFormatArg(FunctionInfo.InstanceName)},
 			{TEXT("PointCount"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointCountName)},
-			{TEXT("PointDataBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointDataBufferName)},
+			{TEXT("PositionDegreeBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PositionDegreeBufferName)},
+			{TEXT("RotationBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + RotationBufferName)},
+			{TEXT("ScaleOpacityBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ScaleOpacityBufferName)},
+			{TEXT("ColorBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ColorBufferName)},
 		};
 		OutHLSL += FString::Format(FormatBounds, ArgsBounds);
 		return true;
@@ -358,32 +438,38 @@ bool UNiagaraDataInterfaceGaussianSplattingPointCloud::GetFunctionHLSL(const FNi
 				out float4 Out_SH9, out float4 Out_SH10, out float4 Out_SH11)
 			{
 				int PointIndex = In_PointIndex < {PointCount} ? In_PointIndex : {PointCount} - 1;
-				int Base = PointIndex * 16;
-				float4 Slot0 = {PointDataBuffer}.Load(Base + 0);
-				Out_Position  = Slot0.xyz;
-				Out_SHDegree  = (int)Slot0.w;
-				Out_Quat      = {PointDataBuffer}.Load(Base + 1);
-				Out_Scale     = {PointDataBuffer}.Load(Base + 2).xyz;
-				Out_Color     = {PointDataBuffer}.Load(Base + 3);
-				Out_SH0       = {PointDataBuffer}.Load(Base + 4);
-				Out_SH1       = {PointDataBuffer}.Load(Base + 5);
-				Out_SH2       = {PointDataBuffer}.Load(Base + 6);
-				Out_SH3       = {PointDataBuffer}.Load(Base + 7);
-				Out_SH4       = {PointDataBuffer}.Load(Base + 8);
-				Out_SH5       = {PointDataBuffer}.Load(Base + 9);
-				Out_SH6       = {PointDataBuffer}.Load(Base + 10);
-				Out_SH7       = {PointDataBuffer}.Load(Base + 11);
-				Out_SH8       = {PointDataBuffer}.Load(Base + 12);
-				Out_SH9       = {PointDataBuffer}.Load(Base + 13);
-				Out_SH10      = {PointDataBuffer}.Load(Base + 14);
-				Out_SH11      = {PointDataBuffer}.Load(Base + 15);
+				float4 PositionDegree = {PositionDegreeBuffer}.Load(PointIndex);
+				float4 ScaleOpacity = {ScaleOpacityBuffer}.Load(PointIndex);
+				int SHBase = PointIndex * 12;
+				Out_Position = PositionDegree.xyz;
+				Out_SHDegree = (int)PositionDegree.w;
+				Out_Quat = {RotationBuffer}.Load(PointIndex);
+				Out_Scale = ScaleOpacity.xyz;
+				Out_Color = {ColorBuffer}.Load(PointIndex);
+				Out_Color.w = ScaleOpacity.w;
+				Out_SH0 = {SHRestBuffer}.Load(SHBase + 0);
+				Out_SH1 = {SHRestBuffer}.Load(SHBase + 1);
+				Out_SH2 = {SHRestBuffer}.Load(SHBase + 2);
+				Out_SH3 = {SHRestBuffer}.Load(SHBase + 3);
+				Out_SH4 = {SHRestBuffer}.Load(SHBase + 4);
+				Out_SH5 = {SHRestBuffer}.Load(SHBase + 5);
+				Out_SH6 = {SHRestBuffer}.Load(SHBase + 6);
+				Out_SH7 = {SHRestBuffer}.Load(SHBase + 7);
+				Out_SH8 = {SHRestBuffer}.Load(SHBase + 8);
+				Out_SH9 = {SHRestBuffer}.Load(SHBase + 9);
+				Out_SH10 = {SHRestBuffer}.Load(SHBase + 10);
+				Out_SH11 = {SHRestBuffer}.Load(SHBase + 11);
 			}
 		)");
 
 		TMap<FString, FStringFormatArg> ArgsBounds = {
 			{TEXT("FunctionName"), FStringFormatArg(FunctionInfo.InstanceName)},
 			{TEXT("PointCount"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointCountName)},
-			{TEXT("PointDataBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointDataBufferName)},
+			{TEXT("PositionDegreeBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PositionDegreeBufferName)},
+			{TEXT("RotationBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + RotationBufferName)},
+			{TEXT("ScaleOpacityBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ScaleOpacityBufferName)},
+			{TEXT("ColorBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ColorBufferName)},
+			{TEXT("SHRestBuffer"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + SHRestBufferName)},
 		};
 		OutHLSL += FString::Format(FormatBounds, ArgsBounds);
 		return true;
@@ -415,12 +501,20 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::GetParameterDefinitionHLS
 
 	static const TCHAR* FormatDeclarations = TEXT(R"(		
 		int {PointCountName};
-		Buffer<float4> {PointDataBufferName};
+		Buffer<float4> {PositionDegreeBufferName};
+		Buffer<float4> {RotationBufferName};
+		Buffer<float4> {ScaleOpacityBufferName};
+		Buffer<float4> {ColorBufferName};
+		Buffer<float4> {SHRestBufferName};
 	)");
 
 	TMap<FString, FStringFormatArg> ArgsDeclarations = {
 		{TEXT("PointCountName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointCountName)},
-		{TEXT("PointDataBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PointDataBufferName)},
+		{TEXT("PositionDegreeBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + PositionDegreeBufferName)},
+		{TEXT("RotationBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + RotationBufferName)},
+		{TEXT("ScaleOpacityBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ScaleOpacityBufferName)},
+		{TEXT("ColorBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + ColorBufferName)},
+		{TEXT("SHRestBufferName"), FStringFormatArg(ParamInfo.DataInterfaceHLSLSymbol + SHRestBufferName)},
 	};
 	OutHLSL += FString::Format(FormatDeclarations, ArgsDeclarations);
 }
@@ -437,10 +531,13 @@ void UNiagaraDataInterfaceGaussianSplattingPointCloud::SetShaderParameters(const
 	DIProxy.TryUpdateBuffer();
 	UNiagaraDataInterfaceGaussianSplattingPointCloud* Current = DIProxy.Owner;
 	FShaderParameters* ShaderParameters = Context.GetParameterNestedStruct<FShaderParameters>();
-	ShaderParameters->PointCount = Current->PointCloud ? Current->PointCloud->GetPoints().Num() : 0;
-	ShaderParameters->PointDataBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.GaussianPointDataBuffer.SRV);
+	ShaderParameters->PointCount = Current->PointCloud ? Current->PointCloud->GetPointCount() : 0;
+	ShaderParameters->PositionDegreeBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.PositionDegreeBuffer.SRV);
+	ShaderParameters->RotationBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.RotationBuffer.SRV);
+	ShaderParameters->ScaleOpacityBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.ScaleOpacityBuffer.SRV);
+	ShaderParameters->ColorBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.ColorBuffer.SRV);
+	ShaderParameters->SHRestBuffer = FNiagaraRenderer::GetSrvOrDefaultFloat4(DIProxy.SHRestBuffer.SRV);
 }
-
 bool UNiagaraDataInterfaceGaussianSplattingPointCloud::Equals(const UNiagaraDataInterface* Other) const
 {
 	bool bIsEqual = Super::Equals(Other);
@@ -501,6 +598,12 @@ const FName UNiagaraDataInterfaceGaussianSplattingPointCloud::GetPointCountFunct
 
 // Global variable prefixes, used in HLSL parameter declarations.
 const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::PointCountName(TEXT("_PointCount"));
-const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::PointDataBufferName(TEXT("_PointDataBuffer"));
-
+const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::PositionDegreeBufferName(TEXT("_PositionDegreeBuffer"));
+const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::RotationBufferName(TEXT("_RotationBuffer"));
+const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::ScaleOpacityBufferName(TEXT("_ScaleOpacityBuffer"));
+const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::ColorBufferName(TEXT("_ColorBuffer"));
+const FString UNiagaraDataInterfaceGaussianSplattingPointCloud::SHRestBufferName(TEXT("_SHRestBuffer"));
 #undef LOCTEXT_NAMESPACE
+
+
+

@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
+
+
 const float SH_0 = 0.28209479177387814f;
 
 FGaussianSplattingPoint::FGaussianSplattingPoint(FVector3f InPos /*= FVector3f::ZeroVector*/, FQuat4f InQuat /*= FQuat4f::Identity*/, FVector3f InScale /*= {1,1,1}*/, FLinearColor InColor /*= FLinearColor::Black*/) : Position(InPos)
@@ -39,6 +41,8 @@ bool FGaussianSplattingPoint::operator==(const FGaussianSplattingPoint& Other) c
 UGaussianSplattingPointCloud::UGaussianSplattingPointCloud(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	
+	
 }
 
 FRichCurve UGaussianSplattingPointCloud::CalcFeatureCurve()
@@ -73,6 +77,7 @@ void UGaussianSplattingPointCloud::SetPoints(const TArray<FGaussianSplattingPoin
 			return ItemA.Scale.Length() > ItemB.Scale.Length();
 		});
 	}
+	RebuildSoACache();
 	OnPointsChanged.Broadcast();
 }
 
@@ -84,6 +89,31 @@ const TArray<FGaussianSplattingPoint>& UGaussianSplattingPointCloud::GetPoints()
 int32 UGaussianSplattingPointCloud::GetPointCount() const
 {
 	return Points.Num();
+}
+
+void UGaussianSplattingPointCloud::RebuildSoACache()
+{
+	const int32 NumPoints = Points.Num();
+
+	PositionsSOA.SetNumUninitialized(NumPoints);
+	QuatsSOA.SetNumUninitialized(NumPoints);
+	ScalesSOA.SetNumUninitialized(NumPoints);
+	ColorsSOA.SetNumUninitialized(NumPoints);
+	SHDegreesSOA.SetNumUninitialized(NumPoints);
+	SHCoeffsSOA.SetNumZeroed(NumPoints * GS_SH_REST_COUNT);
+
+	for (int32 i = 0; i < NumPoints; ++i)
+	{
+		const FGaussianSplattingPoint& Point = Points[i];
+		PositionsSOA[i] = Point.Position;
+		QuatsSOA[i] = Point.Quat;
+		ScalesSOA[i] = Point.Scale;
+		ColorsSOA[i] = Point.Color;
+		SHDegreesSOA[i] = Point.SHDegree;
+
+		float* DstSH = SHCoeffsSOA.GetData() + i * GS_SH_REST_COUNT;
+		FMemory::Memcpy(DstSH, Point.SHCoeffs, sizeof(float) * GS_SH_REST_COUNT);
+	}
 }
 
 FLinearColor SRGBToLinear(const FLinearColor& Color)
@@ -278,6 +308,8 @@ TArray<FGaussianSplattingPoint> ParseSplatFromStream(std::istream& in)
 void UGaussianSplattingPointCloud::LoadFromFile(FString InFilePath)
 {
 	Points = LoadPointsFromFile(InFilePath);
+	RebuildSoACache();
+	OnPointsChanged.Broadcast();
 }
 
 TArray<FGaussianSplattingPoint> UGaussianSplattingPointCloud::LoadPointsFromFile(FString InFilePath)
@@ -313,4 +345,11 @@ void UGaussianSplattingPointCloud::Serialize(FArchive& Ar)
 			Ar.Serialize(CompressedData.data(), CompressedData.size() * sizeof(uint8_t));
 		}
 	}
+
+	if (Ar.IsLoading())
+	{
+		RebuildSoACache();
+	}
 }
+
+

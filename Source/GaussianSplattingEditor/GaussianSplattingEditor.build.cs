@@ -21,6 +21,7 @@ public class GaussianSplattingEditor : ModuleRules
                 "ImageCore",
                 "Niagara",
                 "GaussianSplattingRuntime",
+
             }
 		);
 
